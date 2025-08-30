@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MC Trace Labels – Capture étiquettes MP</title>
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb; --accent:#38bdf8; }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Arial; background:var(--bg); color:var(--text)}
+    header{padding:16px; border-bottom:1px solid #1f2937; display:flex; gap:12px; align-items:center; flex-wrap:wrap}
+    header h1{font-size:18px; margin:0; letter-spacing:.2px}
+    main{max-width:960px; margin:0 auto; padding:16px}
+    .card{background:var(--card); border:1px solid #1f2937; border-radius:14px; padding:16px; margin-bottom:16px}
+    label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px}
+    input,button,select,textarea{border-radius:10px; border:1px solid #334155; background:#0b1220; color:var(--text); padding:10px 12px; width:100%}
+    input:focus,select:focus,textarea:focus{outline:2px solid var(--accent); border-color:transparent}
+    .row{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+    .row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px}
+    .actions{display:flex; gap:10px; flex-wrap:wrap}
+    button{cursor:pointer; border:1px solid #334155; background:#0b1220}
+    button.primary{background:linear-gradient(180deg,#0ea5e9,#0284c7); border:none}
+    small{color:var(--muted)}
+    .list{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px}
+    .item{border:1px solid #334155; border-radius:12px; overflow:hidden; background:#0b1220}
+    .thumb{width:100%; aspect-ratio:4/3; object-fit:cover; display:block}
+    .meta{padding:10px; display:grid; gap:6px}
+    .meta div{font-size:13px}
+    .pill{display:inline-block; padding:2px 8px; border-radius:999px; background:#0ea5e9; color:white; font-size:11px}
+    .hint{font-size:12px; color:var(--muted)}
+    footer{padding:16px; text-align:center; color:var(--muted)}
+    video{width:100%; border-radius:12px; border:1px solid #334155}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📸 MC Trace Labels — Étiquettes MP par OF</h1>
+  </header>
+  <main>
+    <section class="card">
+      <div class="row">
+        <div>
+          <label>URL du webhook (Make.com)</label>
+          <input id="webhook" placeholder="https://hook.eu1.make.com/XXXX" />
+          <small class="hint">L'app envoie chaque capture (OF + Lot + photo) vers ce webhook.</small>
+        </div>
+        <div>
+          <label>Technicien / Opérateur</label>
+          <input id="operator" placeholder="Prénom Nom" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label>OF (scan ou saisi)</label>
+          <div class="actions">
+            <input id="mo" placeholder="MO00017" />
+            <button id="scan-mo">Scanner OF</button>
+          </div>
+        </div>
+        <div>
+          <label>Lot MP courant (scan ou saisi)</label>
+          <div class="actions">
+            <input id="lot" placeholder="LOT-CHOC-240826-01" />
+            <button id="scan-lot">Scanner Lot</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label>Produit MP (facultatif)</label>
+          <input id="component" placeholder="Ex: Chocolat 70%" />
+        </div>
+        <div>
+          <label>Photo de l'étiquette</label>
+          <input id="photo" type="file" accept="image/*" capture="environment" />
+          <small class="hint">Prend la photo en mode portrait ou paysage, l'app compresse automatiquement.</small>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button class="primary" id="add">➕ Ajouter la capture</button>
+        <button id="send">🚀 Envoyer vers Make / Odoo</button>
+      </div>
+    </section>
+
+    <section class="card" id="scannerCard" style="display:none">
+      <div class="actions" style="margin-bottom:8px">
+        <button id="close-scan">Fermer le scanner</button>
+        <small id="scan-mode" class="hint"></small>
+      </div>
+      <video id="preview" playsinline></video>
+      <div class="hint" style="margin-top:8px">Place le code-barres au centre. L'app détecte automatiquement.</div>
+    </section>
+
+    <section class="card">
+      <label>Captures en attente d'envoi</label>
+      <div class="list" id="list"></div>
+      <small class="hint">Astuce : tu peux préparer plusieurs captures puis tout envoyer en une fois.</small>
+    </section>
+  </main>
+  <footer>© Madame Cookies — Traçabilité MP</footer>
+
+  <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
+  <script>
+    const d = document;
+    const $ = (sel)=>d.querySelector(sel);
+    const list = [];
+
+    const maxW = 1600; // compression
+    async function fileToDataURL(file){
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      await new Promise(res=>{ img.onload=res; img.src=url; });
+      const scale = Math.min(1, maxW / img.width);
+      const canvas = d.createElement('canvas');
+      canvas.width = Math.round(img.width*scale);
+      canvas.height = Math.round(img.height*scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img,0,0,canvas.width,canvas.height);
+      const data = canvas.toDataURL('image/jpeg', 0.82);
+      URL.revokeObjectURL(url);
+      return data;
+    }
+
+    function render(){
+      const root = $('#list');
+      root.innerHTML = '';
+      list.forEach((it,idx)=>{
+        const card = d.createElement('div');
+        card.className = 'item';
+        const img = d.createElement('img');
+        img.className = 'thumb';
+        img.src = it.photo;
+        const meta = d.createElement('div');
+        meta.className = 'meta';
+        meta.innerHTML = `
+          <div><span class="pill">OF</span> ${it.mo}</div>
+          <div><span class="pill">Lot</span> ${it.lot}</div>
+          <div>${it.component ? ('MP : '+it.component) : ''}</div>
+          <div class="hint">${new Date(it.taken_at).toLocaleString()}</div>
+          <div class="actions"><button data-i="${idx}" class="rm">Supprimer</button></div>
+        `;
+        card.appendChild(img); card.appendChild(meta);
+        root.appendChild(card);
+      });
+      root.querySelectorAll('button.rm').forEach(btn=>{
+        btn.onclick = ()=>{ list.splice(parseInt(btn.dataset.i),1); render(); };
+      })
+    }
+
+    // ZXing scanner
+    let codeReader; let stream; let scanTarget = null;
+    async function startScan(target){
+      scanTarget = target; // 'mo' or 'lot'
+      $('#scannerCard').style.display = '';
+      $('#scan-mode').textContent = target === 'mo' ? 'Mode: Scanner OF' : 'Mode: Scanner Lot MP';
+      codeReader = new ZXing.BrowserMultiFormatReader();
+      const video = $('#preview');
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+        video.srcObject = stream; video.play();
+        const result = await codeReader.decodeFromVideoDevice(null, video, (res)=>{
+          if(res){
+            const value = res.getText();
+            if(scanTarget==='mo') $('#mo').value = value;
+            if(scanTarget==='lot') $('#lot').value = value;
+            stopScan();
+          }
+        });
+      } catch(e){
+        alert('Caméra non accessible: '+e.message);
+      }
+    }
+    function stopScan(){
+      codeReader && codeReader.reset();
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+      $('#scannerCard').style.display='none';
+    }
+
+    $('#scan-mo').onclick = ()=>startScan('mo');
+    $('#scan-lot').onclick = ()=>startScan('lot');
+    $('#close-scan').onclick = stopScan;
+
+    $('#add').onclick = async ()=>{
+      const mo = $('#mo').value.trim();
+      const lot = $('#lot').value.trim();
+      const component = $('#component').value.trim();
+      const operator = $('#operator').value.trim();
+      const file = $('#photo').files[0];
+      if(!mo){ alert('Renseigne l\'OF.'); return; }
+      if(!lot){ alert('Renseigne le lot MP.'); return; }
+      if(!file){ alert('Ajoute une photo de l\'étiquette.'); return; }
+      const photo = await fileToDataURL(file);
+      list.push({ mo, lot, component, operator, photo, taken_at: new Date().toISOString(), device: navigator.userAgent });
+      $('#photo').value=''; $('#lot').value=''; $('#component').value='';
+      render();
+    };
+
+    $('#send').onclick = async ()=>{
+      const webhook = $('#webhook').value.trim();
+      if(!webhook){ alert('Renseigne l\'URL du webhook Make.'); return; }
+      if(!list.length){ alert('Aucune capture à envoyer.'); return; }
+      const batch = [...list];
+      try{
+        for(const item of batch){
+          const payload = { 
+            mo: item.mo, lot: item.lot, component: item.component || null, 
+            operator: item.operator || null, device: item.device, taken_at: item.taken_at,
+            photo: item.photo
+          };
+          const res = await fetch(webhook, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+          if(!res.ok){ throw new Error('Webhook a répondu '+res.status); }
+        }
+        alert('✅ Envoyé ! Tu peux vérifier dans Odoo (OF et lot).');
+        list.length = 0; render();
+      }catch(e){
+        alert('❌ Erreur envoi: '+e.message);
+      }
+    };
+  </script>
+</body>
+</html>
